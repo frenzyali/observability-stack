@@ -115,6 +115,15 @@ for tool in docker curl jq; do
 done
 if scripts/render-test-config.sh >/dev/null; then pass "rendered fast-timing test config"; else fail "render test config"; exit 1; fi
 mkdir -p artifacts
+# Start from empty volumes: leftover TSDB samples or Alertmanager's
+# notification log from an earlier run would make the baseline and
+# notification assertions meaningless.
+if compose down -v --remove-orphans > artifacts/compose-down.log 2>&1; then
+  pass "removed any previous obs-stack containers and volumes"
+else
+  fail "pre-test cleanup" "see artifacts/compose-down.log"
+  exit 1
+fi
 if compose up -d --build --wait --wait-timeout 300 > artifacts/compose-up.log 2>&1; then
   pass "all containers started and healthy"
 else

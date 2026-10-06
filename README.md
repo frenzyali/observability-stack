@@ -219,7 +219,7 @@ The *Sample app: RED and SLO* dashboard shows availability, the remaining error 
 
 Run them with `make lint` (all static checks), `make test` (rule unit tests and the dashboard drift check) and `make smoke` (end to end, about 10 minutes). Every static check runs in a pinned throwaway container, so only Docker, `jq` and `python3` need to be installed locally.
 
-`make smoke` uses the Compose project `obs-stack`, so it **replaces a stack you started with `make up` and removes its volumes** at the end. Use `KEEP_UP=1 scripts/smoke-test.sh` to leave it running.
+`make smoke` uses the Compose project `obs-stack`, so it **replaces a stack you started with `make up`: it removes its containers and volumes before starting (a clean baseline) and again at the end**. Use `KEEP_UP=1 scripts/smoke-test.sh` to leave it running.
 
 ## Known limitations
 
