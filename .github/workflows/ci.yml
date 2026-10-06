@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Static checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout (full history for gitleaks)
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Lint, validate and unit-test
+        # compose config, promtool check/test, amtool, yamllint, dashboard
+        # JSON + generator drift, hadolint, shellcheck, gitleaks, trivy
+        run: scripts/lint.sh
+
+      - name: Upload Trivy report
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: trivy-report
+          path: artifacts/trivy-report.txt
+          if-no-files-found: ignore
+
+  e2e:
+    name: End-to-end smoke test
+    needs: static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Smoke test (up, verify, chaos, alerts fire and resolve, teardown)
+        run: scripts/smoke-test.sh
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: smoke-test-logs
+          path: artifacts/
+          retention-days: 7
