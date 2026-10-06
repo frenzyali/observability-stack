@@ -1,0 +1,103 @@
+rule_files:
+  - ../rules/slo-recording.yml
+  - ../rules/slo.yml
+evaluation_interval: 1m
+
+tests:
+  - name: Fast burn (10% errors = 20x budget) pages, slow burn stays quiet
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="sample-app",instance="sample-app:8000",method="GET",path="/",status="200"}'
+        values: '0+540x90'
+      - series: 'http_requests_total{job="sample-app",instance="sample-app:8000",method="GET",path="/",status="500"}'
+        values: '0+60x90'
+    promql_expr_test:
+      - expr: job:slo_errors_per_request:ratio_rate1h
+        eval_time: 70m
+        exp_samples:
+          - labels: 'job:slo_errors_per_request:ratio_rate1h{job="sample-app"}'
+            value: 0.1
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: sample-app
+            exp_annotations:
+              summary: "sample-app is burning its error budget fast"
+              description: "At the current error rate the 7-day error budget of the 99.5% availability SLO will be gone in under 28 hours."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#sloerrorbudgetburnfast"
+      - eval_time: 70m         # 10% also exceeds the slow-burn threshold; Alertmanager inhibits it
+        alertname: SLOErrorBudgetBurnSlow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: sample-app
+            exp_annotations:
+              summary: "sample-app is steadily burning its error budget"
+              description: "The error ratio has been above the SLO budget for hours; at this rate the 7-day budget runs out before the window ends."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#sloerrorbudgetburnslow"
+
+  - name: Fast burn resets quickly once errors stop (short window)
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="sample-app",instance="sample-app:8000",method="GET",path="/",status="200"}'
+        values: '0+540x130'
+      # 10% errors for the first hour, then none
+      - series: 'http_requests_total{job="sample-app",instance="sample-app:8000",method="GET",path="/",status="500"}'
+        values: '0+60x60 3600x70'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: sample-app
+            exp_annotations:
+              summary: "sample-app is burning its error budget fast"
+              description: "At the current error rate the 7-day error budget of the 99.5% availability SLO will be gone in under 28 hours."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#sloerrorbudgetburnfast"
+      - eval_time: 95m         # 6h window still over threshold, but the short 30m and 5m windows are clean
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts: []
+
+  - name: Slow burn (2% errors = 4x budget) opens a ticket, does not page
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="sample-app",instance="sample-app:8000",method="GET",path="/",status="200"}'
+        values: '0+588x180'
+      - series: 'http_requests_total{job="sample-app",instance="sample-app:8000",method="GET",path="/",status="500"}'
+        values: '0+12x180'
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: SLOErrorBudgetBurnSlow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: sample-app
+            exp_annotations:
+              summary: "sample-app is steadily burning its error budget"
+              description: "The error ratio has been above the SLO budget for hours; at this rate the 7-day budget runs out before the window ends."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#sloerrorbudgetburnslow"
+
+  - name: Within budget (0.3% errors) nothing fires
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="sample-app",instance="sample-app:8000",method="GET",path="/",status="200"}'
+        values: '0+997x180'
+      - series: 'http_requests_total{job="sample-app",instance="sample-app:8000",method="GET",path="/",status="500"}'
+        values: '0+3x180'
+    alert_rule_test:
+      - eval_time: 170m
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 170m
+        alertname: SLOErrorBudgetBurnSlow
+        exp_alerts: []

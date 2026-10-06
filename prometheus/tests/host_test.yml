@@ -1,0 +1,150 @@
+# promtool test rules prometheus/tests/*.yml
+rule_files:
+  - ../rules/recording.yml
+  - ../rules/host.yml
+evaluation_interval: 1m
+
+tests:
+  - name: InstanceDown fires after 1m of failed scrapes, healthy targets stay quiet
+    interval: 1m
+    input_series:
+      - series: 'up{job="sample-app",instance="sample-app:8000"}'
+        values: '1 1 0 0 0 0'
+      - series: 'up{job="prometheus",instance="localhost:9090"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: InstanceDown
+        exp_alerts: []
+      - eval_time: 2m          # down, but still pending (for: 1m)
+        alertname: InstanceDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: InstanceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: sample-app
+              instance: sample-app:8000
+            exp_annotations:
+              summary: "sample-app target sample-app:8000 is down"
+              description: "Prometheus has failed to scrape sample-app:8000 (job sample-app) for more than 1 minute."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#instancedown"
+
+  - name: HostHighCPU fires on a busy host only after 10m
+    interval: 1m
+    input_series:
+      # idle grows 3s per minute -> 5% idle -> 95% busy
+      - series: 'node_cpu_seconds_total{job="node",instance="busy:9100",cpu="0",mode="idle"}'
+        values: '0+3x30'
+      # idle grows 50s per minute -> ~17% busy
+      - series: 'node_cpu_seconds_total{job="node",instance="calm:9100",cpu="0",mode="idle"}'
+        values: '0+50x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: HostHighCPU
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: HostHighCPU
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: node
+              instance: busy:9100
+            exp_annotations:
+              summary: "High CPU on busy:9100"
+              description: "CPU utilisation has been 95% for 10 minutes (threshold 90%)."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#hosthighcpu"
+
+  - name: HostHighMemory fires above 90% used
+    interval: 1m
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{job="node",instance="full:9100"}'
+        values: '5x20'
+      - series: 'node_memory_MemTotal_bytes{job="node",instance="full:9100"}'
+        values: '100x20'
+      - series: 'node_memory_MemAvailable_bytes{job="node",instance="ok:9100"}'
+        values: '50x20'
+      - series: 'node_memory_MemTotal_bytes{job="node",instance="ok:9100"}'
+        values: '100x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: HostHighMemory
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: HostHighMemory
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: node
+              instance: full:9100
+            exp_annotations:
+              summary: "High memory usage on full:9100"
+              description: "Memory utilisation is 95% (threshold 90%), measured as 1 - MemAvailable/MemTotal."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#hosthighmemory"
+
+  - name: HostDiskSpaceLow ignores tmpfs and healthy disks
+    interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{job="node",instance="n:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '5x10'
+      - series: 'node_filesystem_size_bytes{job="node",instance="n:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '100x10'
+      - series: 'node_filesystem_avail_bytes{job="node",instance="n:9100",device="/dev/sdb1",fstype="ext4",mountpoint="/data"}'
+        values: '50x10'
+      - series: 'node_filesystem_size_bytes{job="node",instance="n:9100",device="/dev/sdb1",fstype="ext4",mountpoint="/data"}'
+        values: '100x10'
+      - series: 'node_filesystem_avail_bytes{job="node",instance="n:9100",device="tmpfs",fstype="tmpfs",mountpoint="/run/user"}'
+        values: '1x10'
+      - series: 'node_filesystem_size_bytes{job="node",instance="n:9100",device="tmpfs",fstype="tmpfs",mountpoint="/run/user"}'
+        values: '100x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HostDiskSpaceLow
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: HostDiskSpaceLow
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: node
+              instance: n:9100
+              device: /dev/sda1
+              fstype: ext4
+              mountpoint: /
+            exp_annotations:
+              summary: "Disk almost full on n:9100 (/)"
+              description: "Only 5% space left on / (threshold 10%)."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#hostdiskspacelow"
+
+  - name: HostDiskWillFillIn24h predicts exhaustion from the trend
+    interval: 1m
+    input_series:
+      # losing 1 unit per minute from 300 of 1000: empty in ~5h
+      - series: 'node_filesystem_avail_bytes{job="node",instance="n:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '300-1x120'
+      - series: 'node_filesystem_size_bytes{job="node",instance="n:9100",device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: '1000x120'
+      # same fill level but flat: no prediction of exhaustion
+      - series: 'node_filesystem_avail_bytes{job="node",instance="n:9100",device="/dev/sdb1",fstype="ext4",mountpoint="/data"}'
+        values: '300x120'
+      - series: 'node_filesystem_size_bytes{job="node",instance="n:9100",device="/dev/sdb1",fstype="ext4",mountpoint="/data"}'
+        values: '1000x120'
+    alert_rule_test:
+      - eval_time: 30m         # trend detected, still pending (for: 1h)
+        alertname: HostDiskWillFillIn24h
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: HostDiskWillFillIn24h
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: node
+              instance: n:9100
+              device: /dev/sda1
+              fstype: ext4
+              mountpoint: /
+            exp_annotations:
+              summary: "Disk on n:9100 (/) predicted to fill within 24h"
+              description: "Linear extrapolation of the last 6h of free space reaches zero within 24 hours, and less than 40% is left."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#hostdiskwillfillin24h"

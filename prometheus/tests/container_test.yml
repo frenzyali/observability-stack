@@ -1,0 +1,59 @@
+rule_files:
+  - ../rules/container.yml
+evaluation_interval: 1m
+
+tests:
+  - name: ContainerRestarting fires on a crash loop, not on a stable container
+    interval: 1m
+    input_series:
+      - series: 'container_start_time_seconds{job="cadvisor",instance="cadvisor:8080",id="/system.slice/docker-aaaaaaaaaaaa.scope",container_id="aaaaaaaaaaaa"}'
+        values: '100 100 200 300 400 500 500 500'
+      - series: 'container_start_time_seconds{job="cadvisor",instance="cadvisor:8080",id="/system.slice/docker-bbbbbbbbbbbb.scope",container_id="bbbbbbbbbbbb"}'
+        values: '100x7'
+    alert_rule_test:
+      - eval_time: 2m          # one restart is not a loop
+        alertname: ContainerRestarting
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ContainerRestarting
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: cadvisor
+              instance: cadvisor:8080
+              id: /system.slice/docker-aaaaaaaaaaaa.scope
+              container_id: aaaaaaaaaaaa
+            exp_annotations:
+              summary: "Container aaaaaaaaaaaa is restarting repeatedly"
+              description: "Container aaaaaaaaaaaa has restarted 4 times in the last 15 minutes (crash loop?)."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#containerrestarting"
+
+  - name: ContainerHighMemory ignores containers without a limit
+    interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{job="cadvisor",instance="cadvisor:8080",id="/system.slice/docker-aaaaaaaaaaaa.scope",container_id="aaaaaaaaaaaa"}'
+        values: '950x10'
+      - series: 'container_spec_memory_limit_bytes{job="cadvisor",instance="cadvisor:8080",id="/system.slice/docker-aaaaaaaaaaaa.scope",container_id="aaaaaaaaaaaa"}'
+        values: '1000x10'
+      # unlimited container (limit 0) with the same usage
+      - series: 'container_memory_working_set_bytes{job="cadvisor",instance="cadvisor:8080",id="/system.slice/docker-bbbbbbbbbbbb.scope",container_id="bbbbbbbbbbbb"}'
+        values: '950x10'
+      - series: 'container_spec_memory_limit_bytes{job="cadvisor",instance="cadvisor:8080",id="/system.slice/docker-bbbbbbbbbbbb.scope",container_id="bbbbbbbbbbbb"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 3m          # pending (for: 5m)
+        alertname: ContainerHighMemory
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: ContainerHighMemory
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: cadvisor
+              instance: cadvisor:8080
+              id: /system.slice/docker-aaaaaaaaaaaa.scope
+              container_id: aaaaaaaaaaaa
+            exp_annotations:
+              summary: "Container aaaaaaaaaaaa is near its memory limit"
+              description: "Working set is 95% of the memory limit; the kernel will OOM-kill it at 100%."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#containerhighmemory"

@@ -1,0 +1,103 @@
+rule_files:
+  - ../rules/recording.yml
+  - ../rules/app.yml
+evaluation_interval: 1m
+
+tests:
+  - name: HighErrorRate fires above 5% 5xx with real traffic only
+    interval: 1m
+    input_series:
+      # "bad": 8 rps OK + 2 rps 500 -> 20% errors
+      - series: 'http_requests_total{job="sample-app",instance="bad:8000",method="GET",path="/",status="200"}'
+        values: '0+480x20'
+      - series: 'http_requests_total{job="sample-app",instance="bad:8000",method="GET",path="/",status="500"}'
+        values: '0+120x20'
+      # "good": 10 rps OK + 0.1 rps 500 -> ~1% errors
+      - series: 'http_requests_total{job="sample-app",instance="good:8000",method="GET",path="/",status="200"}'
+        values: '0+600x20'
+      - series: 'http_requests_total{job="sample-app",instance="good:8000",method="GET",path="/",status="500"}'
+        values: '0+6x20'
+      # "quiet": 50% errors but only ~0.07 rps total (below the traffic guard)
+      - series: 'http_requests_total{job="sample-app",instance="quiet:8000",method="GET",path="/",status="200"}'
+        values: '0+2x20'
+      - series: 'http_requests_total{job="sample-app",instance="quiet:8000",method="GET",path="/",status="500"}'
+        values: '0+2x20'
+    alert_rule_test:
+      - eval_time: 2m          # pending (for: 2m)
+        alertname: HighErrorRate
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: HighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: sample-app
+              instance: bad:8000
+            exp_annotations:
+              summary: "sample-app is returning 5xx for 20% of requests"
+              description: "More than 5% of requests to bad:8000 failed with a 5xx over the last 5 minutes."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#higherrorrate"
+
+  - name: HighLatencyP95 fires when p95 is above 1s
+    interval: 1m
+    input_series:
+      # "slow": every request lands between 1s and 2.5s -> p95 = 2.425s
+      - series: 'http_request_duration_seconds_bucket{job="sample-app",instance="slow:8000",method="GET",path="/",le="0.1"}'
+        values: '0x20'
+      - series: 'http_request_duration_seconds_bucket{job="sample-app",instance="slow:8000",method="GET",path="/",le="1"}'
+        values: '0x20'
+      - series: 'http_request_duration_seconds_bucket{job="sample-app",instance="slow:8000",method="GET",path="/",le="2.5"}'
+        values: '0+600x20'
+      - series: 'http_request_duration_seconds_bucket{job="sample-app",instance="slow:8000",method="GET",path="/",le="+Inf"}'
+        values: '0+600x20'
+      - series: 'http_requests_total{job="sample-app",instance="slow:8000",method="GET",path="/",status="200"}'
+        values: '0+600x20'
+      # "fast": every request under 100ms
+      - series: 'http_request_duration_seconds_bucket{job="sample-app",instance="fast:8000",method="GET",path="/",le="0.1"}'
+        values: '0+600x20'
+      - series: 'http_request_duration_seconds_bucket{job="sample-app",instance="fast:8000",method="GET",path="/",le="1"}'
+        values: '0+600x20'
+      - series: 'http_request_duration_seconds_bucket{job="sample-app",instance="fast:8000",method="GET",path="/",le="2.5"}'
+        values: '0+600x20'
+      - series: 'http_request_duration_seconds_bucket{job="sample-app",instance="fast:8000",method="GET",path="/",le="+Inf"}'
+        values: '0+600x20'
+      - series: 'http_requests_total{job="sample-app",instance="fast:8000",method="GET",path="/",status="200"}'
+        values: '0+600x20'
+    alert_rule_test:
+      - eval_time: 4m          # pending (for: 5m)
+        alertname: HighLatencyP95
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: HighLatencyP95
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: sample-app
+              instance: slow:8000
+            exp_annotations:
+              summary: "p95 latency of sample-app is 2.425s"
+              description: "95th percentile request latency on slow:8000 has been above 1s for 5 minutes."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#highlatencyp95"
+
+  - name: ProbeFailed fires after 2m of failed probes
+    interval: 1m
+    input_series:
+      - series: 'probe_success{job="blackbox-http",instance="http://sample-app:8000/healthz"}'
+        values: '1 1 0 0 0 0 0'
+      - series: 'probe_success{job="blackbox-http",instance="http://grafana:3000/api/health"}'
+        values: '1x6'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ProbeFailed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ProbeFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox-http
+              instance: http://sample-app:8000/healthz
+            exp_annotations:
+              summary: "HTTP probe of http://sample-app:8000/healthz is failing"
+              description: "blackbox-exporter has not received a 2xx from http://sample-app:8000/healthz for 2 minutes."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#probefailed"
