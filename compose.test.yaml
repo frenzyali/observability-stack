@@ -1,0 +1,14 @@
+# Test override used by scripts/smoke-test.sh:
+#   docker compose -f compose.yaml -f compose.test.yaml ...
+# Mounts the fast-timing config rendered by scripts/render-test-config.sh
+# (same rules and routes, shorter intervals) so the end-to-end alert test
+# finishes in minutes instead of hours. Not for normal use.
+services:
+  prometheus:
+    volumes:
+      - ./.test/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./.test/prometheus/rules:/etc/prometheus/rules:ro
+
+  alertmanager:
+    volumes:
+      - ./.test/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
