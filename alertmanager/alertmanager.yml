@@ -1,0 +1,71 @@
+# Alertmanager routing. All receivers point at the local webhook-logger so
+# the full alert pipeline can be tested without any external service.
+# Real receivers (Slack, email) are shown commented out at the bottom; they
+# read secrets from files mounted at runtime, never from this file.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: webhook-default
+  group_by: [alertname, job, instance]
+  group_wait: 30s        # wait to batch alerts that start together
+  group_interval: 5m     # wait before notifying about changes to a group
+  repeat_interval: 4h    # re-notify if an alert is still firing
+  routes:
+    - matchers: ['severity="critical"']
+      receiver: webhook-critical
+      repeat_interval: 1h
+    - matchers: ['severity="warning"']
+      receiver: webhook-warning
+      repeat_interval: 12h
+
+inhibit_rules:
+  # A down target makes every other alert about it noise.
+  - source_matchers: ['alertname="InstanceDown"']
+    target_matchers: ['alertname!="InstanceDown"']
+    equal: [instance]
+  # A critical alert silences the warning-level version of the same problem.
+  - source_matchers: ['severity="critical"']
+    target_matchers: ['severity="warning"']
+    equal: [alertname, instance]
+  # A fast SLO burn already covers the slow-burn ticket.
+  - source_matchers: ['alertname="SLOErrorBudgetBurnFast"']
+    target_matchers: ['alertname="SLOErrorBudgetBurnSlow"']
+    equal: [job]
+
+receivers:
+  - name: webhook-default
+    webhook_configs:
+      - url: http://webhook-logger:9095/default
+        send_resolved: true
+  - name: webhook-critical
+    webhook_configs:
+      - url: http://webhook-logger:9095/critical
+        send_resolved: true
+  - name: webhook-warning
+    webhook_configs:
+      - url: http://webhook-logger:9095/warning
+        send_resolved: true
+
+# --- Real receivers (example only, not active) -------------------------------
+# To page a team, add a receiver like the ones below and point a route at it.
+# Put the secrets in files under alertmanager/secrets/ (gitignored) and mount
+# that directory read-only at /etc/alertmanager/secrets in compose.yaml.
+#
+#  - name: slack-critical
+#    slack_configs:
+#      - api_url_file: /etc/alertmanager/secrets/slack_webhook_url
+#        channel: "#alerts"
+#        send_resolved: true
+#        title: '{{ .CommonLabels.alertname }} ({{ .Status }})'
+#        text: '{{ range .Alerts }}{{ .Annotations.summary }}  {{ .Annotations.runbook_url }}{{ "\n" }}{{ end }}'
+#
+#  - name: email-warning
+#    email_configs:
+#      - to: oncall@example.com
+#        from: alertmanager@example.com
+#        smarthost: smtp.example.com:587
+#        auth_username: alertmanager@example.com
+#        auth_password_file: /etc/alertmanager/secrets/smtp_password
+#        require_tls: true
+#        send_resolved: true
