@@ -4,6 +4,12 @@
 
 A monitoring and alerting stack run with Docker Compose (Prometheus, Alertmanager, Grafana, exporters and an instrumented sample app). Dashboards and alerts are defined as code, the alert rules are unit-tested, and CI breaks the app on purpose and proves the alerts reach a receiver.
 
+![Sample app RED and SLO dashboard during a chaos run](docs/img/dashboard.png)
+*Grafana during `make chaos`: injected errors burn the error budget and drive the burn-rate panels.*
+
+![Burn-rate and error-rate alerts firing in Alertmanager](docs/img/alerts.png)
+*Alertmanager routing the resulting critical alerts to the webhook receiver.*
+
 ## Architecture
 
 ```mermaid
