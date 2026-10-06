@@ -1,0 +1,39 @@
+groups:
+  - name: sample-app
+    rules:
+      - alert: HighErrorRate
+        # Minimum-traffic guard: one failed request out of three should not page.
+        expr: |
+          job_instance:http_requests_errors:ratio_rate5m > 0.05
+            and job_instance:http_requests:rate5m > 0.1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is returning 5xx for {{ $value | humanizePercentage }} of requests"
+          description: "More than 5% of requests to {{ $labels.instance }} failed with a 5xx over the last 5 minutes."
+          runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#higherrorrate"
+
+      - alert: HighLatencyP95
+        expr: |
+          job_instance:http_request_duration_seconds:p95_rate5m > 1
+            and job_instance:http_requests:rate5m > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency of {{ $labels.job }} is {{ $value | humanizeDuration }}"
+          description: "95th percentile request latency on {{ $labels.instance }} has been above 1s for 5 minutes."
+          runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#highlatencyp95"
+
+  - name: probes
+    rules:
+      - alert: ProbeFailed
+        expr: probe_success == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HTTP probe of {{ $labels.instance }} is failing"
+          description: "blackbox-exporter has not received a 2xx from {{ $labels.instance }} for 2 minutes."
+          runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#probefailed"

@@ -1,0 +1,26 @@
+groups:
+  - name: containers
+    rules:
+      - alert: ContainerRestarting
+        # container_start_time_seconds changes each time the container's
+        # process is (re)started, e.g. by a restart policy after a crash.
+        expr: changes(container_start_time_seconds{container_id!=""}[15m]) > 2
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.container_id }} is restarting repeatedly"
+          description: "Container {{ $labels.container_id }} has restarted {{ $value }} times in the last 15 minutes (crash loop?)."
+          runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#containerrestarting"
+
+      - alert: ContainerHighMemory
+        # Only containers with a memory limit (limit 0 means unlimited).
+        expr: |
+          container_memory_working_set_bytes{container_id!=""}
+            / (container_spec_memory_limit_bytes{container_id!=""} > 0) > 0.90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.container_id }} is near its memory limit"
+          description: "Working set is {{ $value | humanizePercentage }} of the memory limit; the kernel will OOM-kill it at 100%."
+          runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#containerhighmemory"

@@ -1,0 +1,45 @@
+# Multi-window, multi-burn-rate alerts for the sample-app availability SLO
+# (99.5%, error budget 0.005). Pattern from the Google SRE Workbook, ch. 5.
+# Burn rate 1 spends exactly the whole budget over the 7-day SLO window.
+# Each condition needs both a long window (is it significant?) and a short
+# window (is it still happening?), so alerts fire fast and reset fast.
+groups:
+  - name: slo.sample-app.alerts
+    rules:
+      - alert: SLOErrorBudgetBurnFast
+        expr: |
+          (
+            job:slo_errors_per_request:ratio_rate1h{job="sample-app"} > (14.4 * 0.005)
+            and job:slo_errors_per_request:ratio_rate5m{job="sample-app"} > (14.4 * 0.005)
+          )
+          or
+          (
+            job:slo_errors_per_request:ratio_rate6h{job="sample-app"} > (6 * 0.005)
+            and job:slo_errors_per_request:ratio_rate30m{job="sample-app"} > (6 * 0.005)
+          )
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "sample-app is burning its error budget fast"
+          description: "At the current error rate the 7-day error budget of the 99.5% availability SLO will be gone in under 28 hours."
+          runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#sloerrorbudgetburnfast"
+
+      - alert: SLOErrorBudgetBurnSlow
+        expr: |
+          (
+            job:slo_errors_per_request:ratio_rate1d{job="sample-app"} > (3 * 0.005)
+            and job:slo_errors_per_request:ratio_rate2h{job="sample-app"} > (3 * 0.005)
+          )
+          or
+          (
+            job:slo_errors_per_request:ratio_rate3d{job="sample-app"} > (1 * 0.005)
+            and job:slo_errors_per_request:ratio_rate6h{job="sample-app"} > (1 * 0.005)
+          )
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "sample-app is steadily burning its error budget"
+          description: "The error ratio has been above the SLO budget for hours; at this rate the 7-day budget runs out before the window ends."
+          runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#sloerrorbudgetburnslow"

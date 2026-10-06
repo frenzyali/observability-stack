@@ -1,0 +1,56 @@
+groups:
+  - name: availability
+    rules:
+      - alert: InstanceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} target {{ $labels.instance }} is down"
+          description: "Prometheus has failed to scrape {{ $labels.instance }} (job {{ $labels.job }}) for more than 1 minute."
+          runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#instancedown"
+
+  - name: host
+    rules:
+      - alert: HostHighCPU
+        expr: instance:node_cpu_utilisation:rate5m > 0.90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU on {{ $labels.instance }}"
+          description: "CPU utilisation has been {{ $value | humanizePercentage }} for 10 minutes (threshold 90%)."
+          runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#hosthighcpu"
+
+      - alert: HostHighMemory
+        expr: instance:node_memory_utilisation:ratio > 0.90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory utilisation is {{ $value | humanizePercentage }} (threshold 90%), measured as 1 - MemAvailable/MemTotal."
+          runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#hosthighmemory"
+
+      - alert: HostDiskSpaceLow
+        expr: instance_mountpoint:node_filesystem_avail_bytes:ratio < 0.10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk almost full on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+          description: "Only {{ $value | humanizePercentage }} space left on {{ $labels.mountpoint }} (threshold 10%)."
+          runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#hostdiskspacelow"
+
+      - alert: HostDiskWillFillIn24h
+        expr: |
+          predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs|overlay|squashfs|nsfs|fuse.*",mountpoint!~"/boot.*"}[6h], 24 * 3600) < 0
+            and instance_mountpoint:node_filesystem_avail_bytes:ratio < 0.40
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk on {{ $labels.instance }} ({{ $labels.mountpoint }}) predicted to fill within 24h"
+          description: "Linear extrapolation of the last 6h of free space reaches zero within 24 hours, and less than 40% is left."
+          runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#hostdiskwillfillin24h"
