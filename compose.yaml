@@ -1,0 +1,262 @@
+name: obs-stack
+
+# Shared hardening for every service: no new privileges, all Linux
+# capabilities dropped, restart on failure.
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  networks:
+    - monitoring
+
+services:
+  prometheus:
+    <<: *hardening
+    image: prom/prometheus:v3.15.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    read_only: true
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+
+  alertmanager:
+    <<: *hardening
+    image: prom/alertmanager:v0.34.1
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --cluster.listen-address=   # single instance: disable HA gossip
+    read_only: true
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    depends_on:
+      webhook-logger:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128m
+
+  grafana:
+    <<: *hardening
+    image: grafana/grafana:13.2.3
+    read_only: true
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?set GRAFANA_ADMIN_USER in .env}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_ALLOW_ORG_CREATE: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/sample-app-red.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  node-exporter:
+    <<: *hardening
+    image: prom/node-exporter:v1.12.1
+    command:
+      - --path.rootfs=/host
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+|var/lib/containers/.+)($$|/)
+    read_only: true
+    # Read-only views of the host so the exporter reports host metrics,
+    # not the container's own. No host PID/network namespace.
+    volumes:
+      - /:/host:ro,rslave
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9100/metrics"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64m
+
+  cadvisor:
+    <<: *hardening
+    image: ghcr.io/google/cadvisor:v0.60.6
+    command:
+      - --housekeeping_interval=15s
+      - --docker_only=false
+      - --store_container_labels=false
+      - --enable_metrics=cpu,memory,network,diskIO
+    read_only: true
+    # Read-only cgroup and Docker state. The Docker socket is deliberately
+    # NOT mounted (it would grant control of the Docker daemon), so containers
+    # are identified by cgroup ID instead of name. See README.
+    volumes:
+      - /:/rootfs:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    cap_add:
+      - DAC_READ_SEARCH   # read root-owned cgroup and docker state files
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+
+  blackbox-exporter:
+    <<: *hardening
+    image: prom/blackbox-exporter:v0.28.0
+    user: "65534:65534"
+    command:
+      - --config.file=/etc/blackbox/blackbox.yml
+    read_only: true
+    volumes:
+      - ./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9115/-/healthy"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64m
+
+  webhook-logger:
+    <<: *hardening
+    image: python:3.14.8-slim-trixie
+    user: "65534:65534"
+    command: ["python", "-u", "/srv/server.py"]
+    read_only: true
+    volumes:
+      - ./webhook-logger/server.py:/srv/server.py:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9095/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64m
+
+  sample-app:
+    <<: *hardening
+    build: ./app
+    image: obs-stack/sample-app:local
+    read_only: true
+    environment:
+      CHAOS_ENABLED: ${SAMPLE_APP_CHAOS_ENABLED:-true}
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:${SAMPLE_APP_PORT:-8000}:8000"
+    # Healthcheck is defined in app/Dockerfile.
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
+
+  loadgen:
+    <<: *hardening
+    build: ./app              # same image as sample-app (build is cached)
+    image: obs-stack/sample-app:local
+    profiles: [demo]
+    command: ["python", "loadgen.py"]
+    read_only: true
+    environment:
+      TARGET_URL: http://sample-app:8000
+      TARGET_RPS: "10"
+      HEARTBEAT_FILE: /tmp/heartbeat
+    tmpfs:
+      - /tmp
+    depends_on:
+      sample-app:
+        condition: service_healthy
+    healthcheck:
+      # loadgen touches the heartbeat file every loop; stale means stuck.
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(0 if time.time() - os.path.getmtime('/tmp/heartbeat') < 30 else 1)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64m
+
+networks:
+  monitoring:
+
+volumes:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:
