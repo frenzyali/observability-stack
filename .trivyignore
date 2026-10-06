@@ -1,0 +1,3 @@
+# Accepted risks for obs-stack/sample-app:local.
+# Format: one CVE ID per line, each with a reason and a review date.
+# (Empty: no CRITICAL finding with an available fix is currently accepted.)

@@ -1,0 +1,7 @@
+.env
+.test/
+alertmanager/secrets/
+artifacts/
+__pycache__/
+*.pyc
+.venv/
