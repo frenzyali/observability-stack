@@ -1,0 +1,46 @@
+# promtool test rules prometheus/tests/*.yml
+# Separate file because ScrapeStale is measured in scrape intervals: series
+# and rule evaluation both run at the production 15s here.
+rule_files:
+  - ../rules/host.yml
+evaluation_interval: 15s
+
+tests:
+  - name: ScrapeStale fires after 3 intervals without a successful scrape, blips stay quiet
+    interval: 15s
+    input_series:
+      - series: 'up{job="node",instance="healthy:9100"}'
+        values: '1x12'
+      # Two failed scrapes in a row, then back: never 3 intervals stale.
+      - series: 'up{job="grafana",instance="blip:3000"}'
+        values: '1 1 0 0 1 1 0 0 1 1 1 1 1'
+      # Every scrape fails from t=30s: stale (pending) at 60s, firing at 75s.
+      - series: 'up{job="sample-app",instance="failing:8000"}'
+        values: '1 1 0x10'
+      # Scrape loop stops writing samples after t=30s: up never turns 0.
+      # 60s old at t=90s (pending), firing at 105s.
+      - series: 'up{job="cadvisor",instance="stalled:8080"}'
+        values: '1 1 1 _x10'
+    alert_rule_test:
+      - eval_time: 1m          # failing is pending (for: 15s), stalled not yet stale
+        alertname: ScrapeStale
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: ScrapeStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: sample-app
+              instance: failing:8000
+            exp_annotations:
+              summary: "Scrape data for sample-app target failing:8000 is stale"
+              description: "No successful scrape of failing:8000 (job sample-app) in 3 scrape intervals (45s); its rate() alerts see old data."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#scrapestale"
+          - exp_labels:
+              severity: warning
+              job: cadvisor
+              instance: stalled:8080
+            exp_annotations:
+              summary: "Scrape data for cadvisor target stalled:8080 is stale"
+              description: "No successful scrape of stalled:8080 (job cadvisor) in 3 scrape intervals (45s); its rate() alerts see old data."
+              runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#scrapestale"

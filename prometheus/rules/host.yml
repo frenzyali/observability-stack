@@ -11,6 +11,23 @@ groups:
           description: "Prometheus has failed to scrape {{ $labels.instance }} (job {{ $labels.job }}) for more than 1 minute."
           runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#instancedown"
 
+      - alert: ScrapeStale
+        # No successful scrape in the last 3 scrape intervals (3 x 15s): either
+        # the last 3 scrapes all failed, or Prometheus stopped writing samples
+        # for the target at all (stalled scrape loop), which up == 0 never sees.
+        # "for: 15s" rides out targets not yet re-scraped after a restart.
+        expr: |
+          max_over_time(up[45s]) == 0
+            or
+          time() - timestamp(up) > 3 * 15
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scrape data for {{ $labels.job }} target {{ $labels.instance }} is stale"
+          description: "No successful scrape of {{ $labels.instance }} (job {{ $labels.job }}) in 3 scrape intervals (45s); its rate() alerts see old data."
+          runbook_url: "https://github.com/frenzyali/observability-stack/blob/main/docs/runbooks.md#scrapestale"
+
   - name: host
     rules:
       - alert: HostHighCPU

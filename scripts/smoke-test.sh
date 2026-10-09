@@ -100,6 +100,28 @@ prom_alert_gone()  {
 }
 alert_resolved()   { prom_alert_gone "$1" && am_alert_gone "$1"; }
 
+# assert_fresh <job> <context>: the job's last scrape succeeded and is at most
+# 2 scrape intervals old, so the alert state just asserted was computed from
+# live data, not from samples left over before the scrapes stopped.
+assert_fresh() {
+  local res
+  res="$(curl -fsS "$PROM/api/v1/targets?state=active" | jq -r --arg job "$1" '
+    def secs: capture("^((?<h>[0-9]+)h)?((?<m>[0-9]+)m)?((?<s>[0-9]+)s)?$")
+      | ((.h // "0") | tonumber) * 3600 + ((.m // "0") | tonumber) * 60 + ((.s // "0") | tonumber);
+    [.data.activeTargets[] | select(.labels.job == $job)] | first // empty
+    | (.lastScrape | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601) as $last
+    | (.scrapeInterval | secs) as $iv
+    | (now - $last | floor) as $age
+    | "\(.health) \($age) \($iv)"')"
+  local health age iv
+  read -r health age iv <<<"$res"
+  if [[ "$health" == "up" ]] && (( age <= 2 * iv )); then
+    pass "$1 data fresh when $2 (last scrape ${age}s ago, interval ${iv}s)"
+  else
+    fail "$1 data fresh when $2" "health=${health:-missing} age=${age:-?}s limit=$((2 * ${iv:-0}))s"
+  fi
+}
+
 # webhook_got <alertname> <firing|resolved>
 webhook_got() {
   compose logs --no-color webhook-logger 2>/dev/null |
@@ -179,7 +201,8 @@ if am_alert_gone InstanceDown; then pass "InstanceDown not active at baseline"; 
 
 step "Chaos 1: inject 80% errors"
 if scripts/chaos.sh errors 0.8; then pass "fault injected"; else fail "chaos errors"; fi
-wait_for 240 "HighErrorRate is firing (active) in Alertmanager" am_alert_active HighErrorRate
+wait_for 240 "HighErrorRate is firing (active) in Alertmanager" am_alert_active HighErrorRate &&
+  assert_fresh sample-app "HighErrorRate fired"
 wait_for 60 "webhook-logger received HighErrorRate firing notification" webhook_got HighErrorRate firing
 if scripts/chaos.sh clear >/dev/null; then pass "errors cleared"; else fail "chaos clear"; fi
 
@@ -199,6 +222,7 @@ if scripts/chaos.sh recover >/dev/null 2>&1; then pass "sample-app restarted and
 wait_for 180 "InstanceDown resolved in Prometheus and Alertmanager" alert_resolved InstanceDown
 wait_for 60 "webhook-logger received InstanceDown resolved notification" webhook_got InstanceDown resolved
 # The error samples must age out of the 5m rate window before the ratio drops.
-wait_for 480 "HighErrorRate resolved in Prometheus and Alertmanager" alert_resolved HighErrorRate
+wait_for 480 "HighErrorRate resolved in Prometheus and Alertmanager" alert_resolved HighErrorRate &&
+  assert_fresh sample-app "HighErrorRate resolved"
 wait_for 60 "webhook-logger received HighErrorRate resolved notification" webhook_got HighErrorRate resolved
 wait_for 60 "all scrape targets up again" all_targets_up

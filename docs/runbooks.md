@@ -24,6 +24,20 @@ open http://127.0.0.1:9093                          # what Alertmanager is notif
 - Container stopped or crashed: `docker compose -p obs-stack up -d <service>`. If it keeps dying, see [ContainerRestarting](#containerrestarting).
 - Running but unscrapeable: check the port and `/metrics` path from inside the network: `docker compose -p obs-stack exec prometheus wget -qO- http://<target>/metrics | head`.
 
+## ScrapeStale
+
+**Meaning:** Prometheus has no successful scrape of a target in the last 3 scrape intervals (45s), confirmed for one more evaluation. Either the last 3 scrapes all failed, or Prometheus stopped writing samples for the target at all, so `up` never turns 0 and [InstanceDown](#instancedown) stays quiet. Severity `warning`. Every `rate()`-based alert on the target (error rate, latency, SLO burn) is working from old data and can fire or resolve for the wrong reason. If `InstanceDown` also fires for the same `instance`, it inhibits this alert: follow that runbook instead.
+
+**Check**
+1. Prometheus → Status → Targets: compare *Last scrape* with the interval, and read `lastError`.
+2. Stalled scrape loop: is Prometheus itself struggling? *Monitoring self-health* dashboard (scrape duration, rule evaluation time, memory); `docker compose -p obs-stack logs --tail 100 prometheus`.
+3. Slow target: a `scrape_duration_seconds` close to the 10s `scrape_timeout` means scrapes are timing out.
+
+**Fix**
+- Target failing: as for [InstanceDown](#instancedown).
+- Prometheus overloaded or stuck: give it more CPU/memory, cut cardinality (`metric_relabel_configs`), or restart it as a stop-gap: `docker compose -p obs-stack restart prometheus`.
+- Until data is fresh again, treat the target's other alerts (firing *or* resolved) as unreliable.
+
 ## HostHighCPU
 
 **Meaning:** Host CPU has been more than 90% busy (all cores, 5m rate) for 10 minutes. Severity `warning`. This is a cause, not a user-facing symptom, so it opens a ticket instead of paging.
